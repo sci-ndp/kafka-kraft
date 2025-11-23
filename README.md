@@ -181,8 +181,6 @@ kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properti
    ```bash
    docker compose down && docker compose up -d
    ```
-5) Before pushing to GitHub, keep real cert material out of the repo (`certs/live/`, `certs/letsencrypt/`, `certs/*.pem`, `certs/*.key`, `certs/*.p12`). The symlinked `certs` path is ignored by git.
-
 ## Secure-only mode (disable plaintext listener)
 - Easiest: do not forward 9092 on your router/firewall. Clients will use 443/9094 (TLS/SCRAM) only.
 - Hard disable in the compose file (optional):
