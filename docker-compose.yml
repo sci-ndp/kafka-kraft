@@ -1,0 +1,93 @@
+version: "3.8"
+
+services:
+  broker:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kraft-broker
+    hostname: broker
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+      - "443:9094"
+    environment:
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: INTERNAL://:9093,EXTERNAL://:9092,SECURE://:9094,CONTROLLER://:9095
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker:9093,EXTERNAL://${HOST_IP:?Set HOST_IP to the machine IP}:9092,SECURE://${HOST_IP:?Set HOST_IP to the machine IP}:443
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:SASL_PLAINTEXT,EXTERNAL:SASL_PLAINTEXT,SECURE:SASL_SSL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9095
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # CLUSTER_ID must be a base64-encoded UUID (22 chars, no padding).
+      CLUSTER_ID: ${CLUSTER_ID:?CLUSTER_ID required}
+
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN,SCRAM-SHA-512
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_LISTENER_NAME_INTERNAL_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_INTERNAL_PLAIN_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="${KAFKA_ADMIN_USER:?}" password="${KAFKA_ADMIN_PASSWORD:?}"
+        user_${KAFKA_ADMIN_USER:?}="${KAFKA_ADMIN_PASSWORD:?}"
+        user_${KAFKA_CLIENT_USER:?}="${KAFKA_CLIENT_PASSWORD:?}";
+      KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_EXTERNAL_PLAIN_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="${KAFKA_ADMIN_USER:?}" password="${KAFKA_ADMIN_PASSWORD:?}"
+        user_${KAFKA_ADMIN_USER:?}="${KAFKA_ADMIN_PASSWORD:?}"
+        user_${KAFKA_CLIENT_USER:?}="${KAFKA_CLIENT_PASSWORD:?}";
+      KAFKA_LISTENER_NAME_SECURE_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+      KAFKA_LISTENER_NAME_SECURE_SCRAM-SHA-512_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.scram.ScramLoginModule required;
+      KAFKA_SSL_KEYSTORE_LOCATION: /etc/kafka/secrets/broker.p12
+      KAFKA_SSL_KEYSTORE_PASSWORD: ${SSL_STORE_PASSWORD:?}
+      KAFKA_SSL_KEY_PASSWORD: ${SSL_STORE_PASSWORD:?}
+      KAFKA_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secrets/truststore.p12
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: ${SSL_STORE_PASSWORD:?}
+      KAFKA_SSL_KEYSTORE_TYPE: PKCS12
+      KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
+      KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ""
+      KAFKA_SUPER_USERS: User:${KAFKA_ADMIN_USER:?}
+    volumes:
+      - ./data/kafka:/var/lib/kafka/data
+      - ./certs:/etc/kafka/secrets:ro
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: kraft
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker:9093
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM: PLAIN
+      KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_ADMIN_USER:?}" password="${KAFKA_ADMIN_PASSWORD:?}";
+    depends_on:
+      broker:
+        condition: service_started
+
+  user-setup:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-user-setup
+    depends_on:
+      broker:
+        condition: service_started
+    environment:
+      KAFKA_ADMIN_USER: ${KAFKA_ADMIN_USER:?}
+      KAFKA_ADMIN_PASSWORD: ${KAFKA_ADMIN_PASSWORD:?}
+      SCRAM_CLIENT_USER: ${SCRAM_CLIENT_USER:?}
+      SCRAM_CLIENT_PASSWORD: ${SCRAM_CLIENT_PASSWORD:?}
+      SCRAM_ADMIN_USER: ${SCRAM_ADMIN_USER:?}
+      SCRAM_ADMIN_PASSWORD: ${SCRAM_ADMIN_PASSWORD:?}
+    entrypoint: ["/bin/bash","/scripts/create_scram_users.sh"]
+    volumes:
+      - ./scripts:/scripts:ro

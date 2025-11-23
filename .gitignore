@@ -1,0 +1,21 @@
+# Entire certs directory or symlink (keeps real material out of repo)
+certs
+
+# Environment (contains credentials)
+.env
+
+# Kafka data directory
+data/
+
+# TLS material and certbot outputs (avoid committing real keys/keystores)
+certs/*.key
+certs/*.pem
+certs/*.p12
+certs/*.srl
+certs/*.csr
+certs/live/
+certs/letsencrypt/
+certs/config/
+certs/logs/
+certs/work/
+certs/certs/
