@@ -10,6 +10,21 @@ Single-broker Apache Kafka (KRaft mode) with SASL/PLAIN auth, external access bo
 5) Kafka UI: http://localhost:8080 (no UI auth; connects over internal SASL_PLAINTEXT).  
 6) Secure listener: SASL_SSL + SCRAM on `9094` using dev self-signed certs in `certs/`.
 
+## Step-by-step setup
+1) Clone the repo and ensure Docker is running.  
+2) Provide certs in `certs/` (symlink is fine). Choose one:
+   - Use the bundled self-signed dev certs (default), or
+   - Bring a real cert (see “TLS options” below), or
+   - Regenerate a self-signed bundle with your domain/IP.
+3) Copy env template: `cp .env.example .env`.  
+4) Set `HOST_IP` in `.env` to the public DNS name or IP clients dial (e.g., `kafka.example.com`). Set `SSL_STORE_PASSWORD` to match your keystore/truststore. Adjust user passwords as desired.  
+5) If exposing externally, set up router/NAT and firewall: forward TCP 443→443 (secure listener). Only forward 9092 if you intentionally allow plaintext. Do not expose 9093.  
+6) Start: `docker compose up -d`.  
+7) Verify locally: `HOST_IP=<your-dns-or-ip> ./scripts/test_stack.sh`.  
+8) Verify externally over TLS/SCRAM (443) with kcat (see commands below).  
+9) If you need Kafka UI remotely, forward 8080 (optional, no auth). Otherwise keep it local.  
+10) To keep plaintext disabled, see “Secure-only mode” below.
+
 ## Remote access (ports, DNS, firewall)
 - Set `HOST_IP` in `.env` to the DNS name or public IP clients dial (e.g., `kafka.example.com`), then recreate the stack (`docker compose down && docker compose up -d`).
 - Router/NAT: forward TCP 443→443 (preferred secure listener, mapped to container 9094). Forward 9092→9092 only if you need plaintext SASL/PLAIN. Kafka UI on 8080 is optional. Do not expose 9093 (internal/controller).
@@ -89,6 +104,14 @@ kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properti
    - `keytool -importcert -alias public-ca -file certs/live/<your-domain>/fullchain.pem -keystore certs/truststore.p12 -storepass ${SSL_STORE_PASSWORD} -noprompt`
 3) Set `HOST_IP` to that domain in `.env`, restart the stack, and point clients at your system CA bundle (no need for `ssl.endpoint.identification.algorithm=none`).
 4) Before pushing to GitHub, remove/ignore any real cert material (`certs/live/`, `certs/letsencrypt/`, `certs/*.pem`, `certs/*.key`, `certs/*.p12`) so secrets are not committed. Keep only the dev bundle if you need a sample.
+
+## Secure-only mode (disable plaintext listener)
+- Easiest: do not forward 9092 on your router/firewall. Clients will use 443/9094 (TLS/SCRAM) only.
+- Hard disable in the compose file (optional):
+  1) In `docker-compose.yml`, remove the `9092:9092` port mapping.  
+  2) In `environment`, remove `EXTERNAL://:9092` from `KAFKA_LISTENERS`, remove the `EXTERNAL` entry from `KAFKA_ADVERTISED_LISTENERS`, remove `EXTERNAL` from `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`, and delete the `KAFKA_LISTENER_NAME_EXTERNAL_*` blocks.  
+  3) Recreate: `docker compose down && docker compose up -d`.  
+  4) Clients connect via `SASL_SSL://${HOST_IP}:443` (or 9094 if you prefer the raw port).
 
 ## Multi-broker option (3-node KRaft)
 - Compose file: `docker-compose.multi.yml`
