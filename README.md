@@ -10,20 +10,56 @@ Single-broker Apache Kafka (KRaft mode) with SASL/PLAIN auth, external access bo
 5) Kafka UI: http://localhost:8080 (no UI auth; connects over internal SASL_PLAINTEXT).  
 6) Secure listener: SASL_SSL + SCRAM on `9094` using dev self-signed certs in `certs/`.
 
-## Step-by-step setup
-1) Clone the repo and ensure Docker is running.  
-2) Provide certs in `certs/` (symlink is fine). Choose one:
-   - Use the bundled self-signed dev certs (default), or
-   - Bring a real cert (see “TLS options” below), or
-   - Regenerate a self-signed bundle with your domain/IP.
-3) Copy env template: `cp .env.example .env`.  
+## Step-by-step setup (with commands)
+1) Clone and enter:  
+   ```bash
+   git clone git@github.com:sci-ndp/kafka-kraft.git
+   cd kafka-kraft
+   ```
+2) Place certs where the stack expects them (symlink keeps secrets out of the repo). Example layout one directory above the repo:  
+   ```bash
+   mkdir -p ../kafka-kraft-real-certs/certs
+   # copy or generate your certs into that directory:
+   #   broker.p12, broker.key, broker.crt, truststore.p12, ca.crt (or your fullchain/privkey for public certs)
+   ln -s ../kafka-kraft-real-certs/certs certs
+   ```
+   Choose one of:
+   - Use the bundled self-signed dev certs (if you have them).
+   - Bring a real cert (see “TLS options” below).
+   - Regenerate a self-signed bundle with your domain/IP (see “TLS options”).
+3) Copy env template:  
+   ```bash
+   cp .env.example .env
+   ```
 4) Set `HOST_IP` in `.env` to the public DNS name or IP clients dial (e.g., `kafka.example.com`). Set `SSL_STORE_PASSWORD` to match your keystore/truststore. Adjust user passwords as desired.  
-5) If exposing externally, set up router/NAT and firewall: forward TCP 443→443 (secure listener). Only forward 9092 if you intentionally allow plaintext. Do not expose 9093.  
-6) Start: `docker compose up -d`.  
-7) Verify locally: `HOST_IP=<your-dns-or-ip> ./scripts/test_stack.sh`.  
-8) Verify externally over TLS/SCRAM (443) with kcat (see commands below).  
-9) If you need Kafka UI remotely, forward 8080 (optional, no auth). Otherwise keep it local.  
-10) To keep plaintext disabled, see “Secure-only mode” below.
+5) If exposing externally, set up router/NAT and firewall: forward TCP 443→443 (secure listener). Only forward 9092 if you intentionally allow plaintext. Do not expose 9093. If you need Kafka UI remotely, forward 8080 (optional, no auth).  
+6) Start the stack:  
+   ```bash
+   docker compose up -d
+   ```
+7) Verify locally (uses internal listener):  
+   ```bash
+   HOST_IP=<your-dns-or-ip> ./scripts/test_stack.sh
+   ```
+8) Verify externally over TLS/SCRAM on 443 with kcat (adjust CA path per your cert choice):  
+   ```bash
+   set -a; source .env; set +a
+   printf 'hello\n' | kcat -b "${HOST_IP}:443" \
+     -X security.protocol=SASL_SSL \
+     -X sasl.mechanisms=SCRAM-SHA-512 \
+     -X sasl.username="${SCRAM_CLIENT_USER}" \
+     -X sasl.password="${SCRAM_CLIENT_PASSWORD}" \
+     -X ssl.ca.location=/etc/ssl/cert.pem \
+     -t test_secure -P
+   kcat -b "${HOST_IP}:443" \
+     -X security.protocol=SASL_SSL \
+     -X sasl.mechanisms=SCRAM-SHA-512 \
+     -X sasl.username="${SCRAM_CLIENT_USER}" \
+     -X sasl.password="${SCRAM_CLIENT_PASSWORD}" \
+     -X ssl.ca.location=/etc/ssl/cert.pem \
+     -t test_secure -C -o beginning -e -q
+   ```
+9) To keep plaintext disabled, see “Secure-only mode” below.
 
 ## Remote access (ports, DNS, firewall)
 - Set `HOST_IP` in `.env` to the DNS name or public IP clients dial (e.g., `kafka.example.com`), then recreate the stack (`docker compose down && docker compose up -d`).
