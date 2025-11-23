@@ -8,7 +8,7 @@ Single-broker Apache Kafka (KRaft mode) with SASL/PLAIN auth, external access bo
 3) Optional: adjust users/passwords, `CLUSTER_ID` (22-char base64 UUID), and `SSL_STORE_PASSWORD` if you regenerate certs.  
 4) Start single broker: `docker compose up -d`  
 5) Kafka UI: http://localhost:8080 (no UI auth; connects over internal SASL_PLAINTEXT).  
-6) Secure listener: SASL_SSL + SCRAM on `9094` using dev self-signed certs in `certs/`.
+6) Secure listener: SASL_SSL + SCRAM on `9094` (443 mapped). Supply certs under `certs/` (symlink), either self-signed or public—see TLS section for commands.
 
 ## Step-by-step setup (with commands)
 1) Clone and enter:  
@@ -24,7 +24,7 @@ Single-broker Apache Kafka (KRaft mode) with SASL/PLAIN auth, external access bo
    ln -s ../kafka-kraft-real-certs/certs certs
    ```
    Choose one of:
-   - Use the bundled self-signed dev certs (if you have them).
+   - Use an existing self-signed dev bundle you created.
    - Bring a real cert (see “TLS options” below).
    - Regenerate a self-signed bundle with your domain/IP (see “TLS options”).
 3) Copy env template:  
@@ -93,7 +93,7 @@ kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properti
 ```
 
 ### SASL_SSL + SCRAM example (kcat)
-- Self-signed/dev bundle (default): trust the bundled CA and disable hostname verification: add `-X ssl.ca.location=certs/ca.crt -X ssl.endpoint.identification.algorithm=none`.
+- Self-signed/dev bundle: trust your generated CA (e.g., `certs/ca.crt`) and disable hostname verification: add `-X ssl.ca.location=certs/ca.crt -X ssl.endpoint.identification.algorithm=none`.
 - Public cert (e.g., Let’s Encrypt): point to your system trust store (e.g., `/etc/ssl/cert.pem` or `/opt/homebrew/etc/openssl@3/cert.pem`) and keep hostname verification on (omit `ssl.endpoint.identification.algorithm`).
 - Produce (adjust CA path based on cert choice):  
   `printf 'hello\n' | kcat -b ${HOST_IP}:9094 -X security.protocol=SASL_SSL -X sasl.mechanisms=SCRAM-SHA-512 -X sasl.username=${SCRAM_CLIENT_USER} -X sasl.password=${SCRAM_CLIENT_PASSWORD} -X ssl.ca.location=/opt/homebrew/etc/openssl@3/cert.pem -t test_secure -P`
@@ -103,8 +103,8 @@ kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properti
 
 ## TLS options: self-signed vs public CA
 
-### Using the bundled self-signed dev certs
-- Already present under `certs/`; best for local/testing. Clients must trust `certs/ca.crt` and usually set `ssl.endpoint.identification.algorithm=none` unless you regenerate with proper SANs.
+### Using a self-signed dev bundle
+- Place or generate it under `certs/` (symlinked). Clients must trust your `ca.crt` and usually set `ssl.endpoint.identification.algorithm=none` unless you include proper SANs.
 
 ### Regenerate self-signed bundle with your DNS/IP
 1) Place certs outside the repo and symlink (example):  
