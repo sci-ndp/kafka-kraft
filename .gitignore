@@ -1,3 +1,6 @@
+# Repo-specific instructions (keep private)
+AGENTS.md
+
 # Entire certs directory or symlink (keeps real material out of repo)
 certs
 
