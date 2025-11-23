@@ -13,7 +13,7 @@ Single-broker Apache Kafka (KRaft mode) with SASL/PLAIN auth, external access bo
 ## Step-by-step setup (with commands)
 1) Clone and enter:  
    ```bash
-   git clone git@github.com:sci-ndp/kafka-kraft.git
+   git clone https://github.com/sci-ndp/kafka-kraft.git
    cd kafka-kraft
    ```
 2) Place certs where the stack expects them (symlink keeps secrets out of the repo). Example layout one directory above the repo:  
