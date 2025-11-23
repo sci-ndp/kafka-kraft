@@ -107,11 +107,21 @@ kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properti
 - Already present under `certs/`; best for local/testing. Clients must trust `certs/ca.crt` and usually set `ssl.endpoint.identification.algorithm=none` unless you regenerate with proper SANs.
 
 ### Regenerate self-signed bundle with your DNS/IP
-1) Pick a password and set `SSL_STORE_PASSWORD` in `.env` (used for keystore/truststore).  
-2) (Optional) rotate the CA:  
-   `openssl req -x509 -newkey rsa:2048 -days 365 -nodes -subj "/CN=kafka-ca" -keyout certs/ca.key -out certs/ca.crt`  
-3) Create a minimal SAN config (replace the domain/IP placeholders):  
+1) Place certs outside the repo and symlink (example):  
+   ```bash
+   mkdir -p ../kafka-kraft-real-certs/certs
+   ln -s ../kafka-kraft-real-certs/certs certs
    ```
+2) Pick a password and set `SSL_STORE_PASSWORD` in `.env` (used for keystore/truststore).  
+3) Create a CA (replace CN if you like):  
+   ```bash
+   openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
+     -subj "/CN=kafka-ca" \
+     -keyout certs/ca.key \
+     -out certs/ca.crt
+   ```
+4) Create a SAN config with your domain/IP:  
+   ```bash
    cat > certs/openssl-san.cnf <<'EOF'
    [req]
    distinguished_name=req_distinguished_name
@@ -125,21 +135,53 @@ kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properti
    subjectAltName = DNS:kafka.example.com,IP:203.0.113.10
    EOF
    ```
-4) Create and sign a broker cert with that SAN:  
-   `openssl req -new -newkey rsa:2048 -nodes -keyout certs/broker.key -out certs/broker.csr -config certs/openssl-san.cnf`  
-   `openssl x509 -req -in certs/broker.csr -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial -out certs/broker.crt -days 365 -extensions v3_req -extfile certs/openssl-san.cnf`
-5) Build the keystore/truststore Kafka expects (uses `SSL_STORE_PASSWORD`):  
-   - `openssl pkcs12 -export -in certs/broker.crt -inkey certs/broker.key -certfile certs/ca.crt -out certs/broker.p12 -name broker -passout pass:${SSL_STORE_PASSWORD}`  
-   - `keytool -importcert -alias kafka-ca -file certs/ca.crt -keystore certs/truststore.p12 -storepass ${SSL_STORE_PASSWORD} -noprompt`
-6) Restart: `docker compose down && docker compose up -d`.
+   Replace `kafka.example.com` and `203.0.113.10` with your domain/IP.
+5) Create key/csr and sign:  
+   ```bash
+   openssl req -new -newkey rsa:2048 -nodes \
+     -keyout certs/broker.key \
+     -out certs/broker.csr \
+     -config certs/openssl-san.cnf
+   openssl x509 -req -in certs/broker.csr \
+     -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
+     -out certs/broker.crt -days 365 \
+     -extensions v3_req -extfile certs/openssl-san.cnf
+   ```
+6) Build keystore/truststore Kafka expects (uses `SSL_STORE_PASSWORD`):  
+   ```bash
+   openssl pkcs12 -export \
+     -in certs/broker.crt -inkey certs/broker.key -certfile certs/ca.crt \
+     -out certs/broker.p12 -name broker -passout pass:${SSL_STORE_PASSWORD}
+   keytool -importcert -alias kafka-ca -file certs/ca.crt \
+     -keystore certs/truststore.p12 -storepass ${SSL_STORE_PASSWORD} -noprompt
+   ```
+7) Restart:  
+   ```bash
+   docker compose down && docker compose up -d
+   ```
 
 ### Use a real certificate (e.g., Let’s Encrypt)
-1) Obtain a cert/key (e.g., via certbot) so you have `fullchain.pem` and `privkey.pem` under `certs/live/<your-domain>/`.  
-2) Export a PKCS#12 for Kafka and a truststore (reuses `SSL_STORE_PASSWORD`):  
-   - `openssl pkcs12 -export -in certs/live/<your-domain>/fullchain.pem -inkey certs/live/<your-domain>/privkey.pem -out certs/broker.p12 -name broker -passout pass:${SSL_STORE_PASSWORD}`  
-   - `keytool -importcert -alias public-ca -file certs/live/<your-domain>/fullchain.pem -keystore certs/truststore.p12 -storepass ${SSL_STORE_PASSWORD} -noprompt`
-3) Set `HOST_IP` to that domain in `.env`, restart the stack, and point clients at your system CA bundle (no need for `ssl.endpoint.identification.algorithm=none`).
-4) Before pushing to GitHub, remove/ignore any real cert material (`certs/live/`, `certs/letsencrypt/`, `certs/*.pem`, `certs/*.key`, `certs/*.p12`) so secrets are not committed. Keep only the dev bundle if you need a sample.
+1) Place certs outside the repo and symlink (if not already):  
+   ```bash
+   mkdir -p ../kafka-kraft-real-certs/certs
+   ln -s ../kafka-kraft-real-certs/certs certs
+   ```
+2) Obtain `fullchain.pem` and `privkey.pem` (e.g., certbot) and copy them to `certs/live/<your-domain>/`.  
+3) Export PKCS#12 and truststore (reuses `SSL_STORE_PASSWORD`):  
+   ```bash
+   openssl pkcs12 -export \
+     -in certs/live/<your-domain>/fullchain.pem \
+     -inkey certs/live/<your-domain>/privkey.pem \
+     -out certs/broker.p12 -name broker -passout pass:${SSL_STORE_PASSWORD}
+   keytool -importcert -alias public-ca \
+     -file certs/live/<your-domain>/fullchain.pem \
+     -keystore certs/truststore.p12 -storepass ${SSL_STORE_PASSWORD} -noprompt
+   ```
+4) Set `HOST_IP` to that domain in `.env`, restart the stack, and point clients at your system CA bundle (no need for `ssl.endpoint.identification.algorithm=none`):  
+   ```bash
+   docker compose down && docker compose up -d
+   ```
+5) Before pushing to GitHub, keep real cert material out of the repo (`certs/live/`, `certs/letsencrypt/`, `certs/*.pem`, `certs/*.key`, `certs/*.p12`). The symlinked `certs` path is ignored by git.
 
 ## Secure-only mode (disable plaintext listener)
 - Easiest: do not forward 9092 on your router/firewall. Clients will use 443/9094 (TLS/SCRAM) only.
