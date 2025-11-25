@@ -7,8 +7,12 @@ certs
 # Environment (contains credentials)
 .env
 
+# Local setup cache
+.setup-config
+
 # Kafka data directory
 data/
+data-user/
 
 # TLS material and certbot outputs (avoid committing real keys/keystores)
 certs/*.key
