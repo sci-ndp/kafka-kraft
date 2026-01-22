@@ -6,6 +6,10 @@ certs
 
 # Environment (contains credentials)
 .env
+.kafka-credentials
+
+# Generated docker-compose
+docker-compose.generated.yml
 
 # Local setup cache
 .setup-config

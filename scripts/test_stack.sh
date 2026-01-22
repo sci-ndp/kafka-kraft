@@ -1,10 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source .env if it exists
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+  set -a
+  source "$PROJECT_DIR/.env"
+  set +a
+fi
+
 COMPOSE_CMD=${COMPOSE_CMD:-"docker compose"}
 
+# Determine which compose file to use
+COMPOSE_FILE=""
+if [[ -f "$PROJECT_DIR/docker-compose.generated.yml" ]]; then
+  COMPOSE_FILE="-f $PROJECT_DIR/docker-compose.generated.yml"
+elif [[ -f "$PROJECT_DIR/docker-compose.yml" ]]; then
+  COMPOSE_FILE="-f $PROJECT_DIR/docker-compose.yml"
+fi
+
 # Detect whether multi-broker stack is running by checking for broker-2 service.
-services=$($COMPOSE_CMD ps --services 2>/dev/null || true)
+services=$($COMPOSE_CMD $COMPOSE_FILE ps --services 2>/dev/null || true)
 if echo "$services" | grep -q "^broker-2$"; then
   MODE="multi"
   BROKER_SERVICE="broker-1"
@@ -17,17 +35,17 @@ else
   REPLICATION_FACTOR=1
 fi
 
-ADMIN_USER=${KAFKA_ADMIN_USER:?KAFKA_ADMIN_USER required}
-ADMIN_PASSWORD=${KAFKA_ADMIN_PASSWORD:?KAFKA_ADMIN_PASSWORD required}
-CLIENT_USER=${KAFKA_CLIENT_USER:?KAFKA_CLIENT_USER required}
-CLIENT_PASSWORD=${KAFKA_CLIENT_PASSWORD:?KAFKA_CLIENT_PASSWORD required}
+ADMIN_USER=${KAFKA_ADMIN_USER:-admin}
+ADMIN_PASSWORD=${KAFKA_ADMIN_PASSWORD:-admin-secret}
+CLIENT_USER=${KAFKA_CLIENT_USER:-client}
+CLIENT_PASSWORD=${KAFKA_CLIENT_PASSWORD:-client-secret}
 TOPIC=${KAFKA_TEST_TOPIC:-test-stack}
 
 echo "Detected stack: ${MODE} (service: ${BROKER_SERVICE}, bootstrap: ${BOOTSTRAP})"
 
 # Helper to run a command inside the broker container.
 exec_in_broker() {
-  ${COMPOSE_CMD} exec -T "${BROKER_SERVICE}" bash -c "$*"
+  ${COMPOSE_CMD} ${COMPOSE_FILE} exec -T "${BROKER_SERVICE}" bash -c "$*"
 }
 
 # Build a temp config inside the container (SASL/PLAIN over internal listener).
