@@ -1,187 +1,192 @@
-# Kafka KRaft (no ZooKeeper) with SASL/PLAIN/SCRAM + Kafka UI
+# Kafka KRaft (no ZooKeeper) with SASL/PLAIN + SCRAM + Kafka UI
 
-Single-broker Apache Kafka in KRaft mode with SASL/PLAIN internally, optional SASL_SSL + SCRAM externally, and Kafka UI. Secrets stay out of git via `.env` (ignored) and a certs symlink that points outside the repo. Data now lives under `./data-user/kafka` (writable by the container user).
+This repo provides a one-command launcher (`./kafka-start.sh`) that brings up Kafka in KRaft mode with:
+- SASL/PLAIN for internal and external plaintext access
+- SASL_SSL + SCRAM for encrypted access (optional to verify certs on clients)
+- Kafka UI (optional)
+- A generated `.env`, TLS material, and a ready-to-run compose file
 
-## What you need
+## Requirements
 - Docker + docker compose
-- A base64-encoded UUID for `CLUSTER_ID` (22 chars, no padding)
-- TLS material (self-signed or real cert) placed outside the repo and symlinked to `certs/`
-- Ports available: 9092 (plaintext SASL/PLAIN), 9094/443 (TLS/SCRAM), 8080 (UI)
+- bash
+- openssl (for TLS generation)
+- python3 or uuidgen/xxd (for CLUSTER_ID generation; the script has fallbacks)
 
-## Quick start
+## Quick start (single broker)
 ```bash
 git clone https://github.com/sci-ndp/kafka-kraft.git
 cd kafka-kraft
 
-# 1) Keep certs out of git: place them outside, then symlink
-mkdir -p ../kafka-kraft-real-certs/certs
-ln -s ../kafka-kraft-real-certs/certs certs
-# copy in your certs: broker.p12, truststore.p12, ca.crt (or see TLS section to generate)
+# Local only
+./kafka-start.sh --generate-passwords
 
-# 2) Prepare data dir (writable by container user 1000)
-mkdir -p data-user/kafka
-
-# 3) Create your env (ignored by git) and fill it in
-cp .env.example .env
+# If clients connect from another machine, set the advertised host/IP
+./kafka-start.sh --generate-passwords -H 10.244.2.218
 ```
-Edit `.env`:
-- `HOST_IP` = DNS name or IP clients will use
-- `SSL_STORE_PASSWORD` = password used to build `broker.p12`/`truststore.p12`
-- Set admin/client/SCRAM passwords as you like
-- (Optional) `KAFKA_UI_USERNAME` / `KAFKA_UI_PASSWORD` for UI login (see below)
 
-Bring it up:
+Check status/logs:
 ```bash
-docker compose up -d
-docker compose ps
+docker compose -f docker-compose.generated.yml ps
+# logs
+docker compose -f docker-compose.generated.yml logs -f
 ```
-Kafka UI: http://localhost:8080 (add auth via the optional UI section).  
-Secure listener: SASL_SSL + SCRAM on host port 443 (container 9094).  
-Plaintext listener: SASL/PLAIN on 9092 (only expose if you mean to).
 
-## Keeping secrets out of git
-- `.env` is gitignored; store all passwords there, never in compose files.
-- `certs` is a symlink to a directory outside the repo; keep your keys/keystores there.
-- Data persists under `./data-user/kafka`; this path is gitignored.
-- If you create a `docker-compose.override.yml` with auth or extra tweaks, keep it private (e.g., in `.git/info/exclude`) if it references secret files.
+Stop:
+```bash
+./kafka-stop.sh
+```
 
-## Kafka endpoints & creds (from `.env`)
-- Internal SASL/PLAIN: `SASL_PLAINTEXT://${HOST_IP}:9092`
-  - Admin: `${KAFKA_ADMIN_USER}/${KAFKA_ADMIN_PASSWORD}`
-  - Client: `${KAFKA_CLIENT_USER}/${KAFKA_CLIENT_PASSWORD}`
-- Secure SASL_SSL + SCRAM: `SASL_SSL://${HOST_IP}:9094` (host maps 443→9094)
-  - SCRAM users: `${SCRAM_ADMIN_USER}/${SCRAM_ADMIN_PASSWORD}`, `${SCRAM_CLIENT_USER}/${SCRAM_CLIENT_PASSWORD}`
-- Re-seed SCRAM users after password changes: `docker compose run --rm user-setup`
-- Add another SCRAM user without restart: `./scripts/add_scram_user.sh <user> <pass> [SCRAM-SHA-512]`
+## What the script creates
+- `.env` with all settings (gitignored)
+- `.kafka-credentials` with generated passwords (chmod 600)
+- `docker-compose.generated.yml` (the file the script runs)
+- `certs/` with `broker.p12`, `truststore.p12`, `ca.crt`
+- `data/kafka` (single broker) or `data/broker-*` (multi broker)
 
-## Kafka UI login (optional, keeps creds in `.env`)
-Kafka UI ships without auth. To require a username/password:
-1) Add to `.env` (already in `.env.example`):
-   ```
-   KAFKA_UI_USERNAME=ui-admin
-   KAFKA_UI_PASSWORD=ui-admin-secret
-   ```
-2) Create `docker-compose.override.yml` (kept locally) with:
-   ```yaml
-   services:
-     kafka-ui:
-       environment:
-         KAFKA_UI_AUTH_TYPE: LOGIN_FORM
-         KAFKA_UI_AUTH_LOGIN_FORM_USERS_0_USERNAME: ${KAFKA_UI_USERNAME}
-         KAFKA_UI_AUTH_LOGIN_FORM_USERS_0_PASSWORD: ${KAFKA_UI_PASSWORD}
-         KAFKA_UI_AUTH_LOGIN_FORM_USERS_0_ROLES_0: ADMIN
-   ```
-3) Restart: `docker compose down && docker compose up -d`
+## Configuration options (script flags)
+Common flags:
+- `-b, --brokers 1|3` start single broker or 3-broker KRaft quorum
+- `-H, --host <host-or-ip>` advertised address clients will use
+- `-u, --user <name>` admin user (PLAIN)
+- `-p, --password <pass>` admin password (PLAIN)
+- `-c, --client-user <name>` client user (PLAIN)
+- `-C, --client-pass <pass>` client password (PLAIN)
+- `--generate-passwords` auto-generate passwords
+- `--external-port <port>` external SASL_PLAINTEXT port (single broker only)
+- `--secure-port <port>` external SASL_SSL port (single broker only)
+- `--no-ui` disable Kafka UI
+- `--ui-port <port>` UI port
+- `--force-certs` regenerate self-signed certs even if they exist
+- `--foreground` run in foreground (default is detached)
 
-If you prefer proxy-based Basic Auth, front Kafka UI with nginx/caddy and store the htpasswd file outside the repo; point the proxy at `kafka-ui:8080`.
+## Operation modes (with examples)
 
-## Remote access (ports, DNS, firewall)
-- Set `HOST_IP` to the DNS name/IP clients dial, then recreate the stack.
-- Forward 443→443 for the secure listener. Only forward 9092 if you need plaintext. Do not expose 9093 (internal/controller).
-- UI on 8080 is optional; protect it (auth or reverse proxy) before exposing.
-- Test reachability: `nc -vz <domain> 443` (and 9092 if exposed).
+### 1) Single broker (default)
+- Ports: `9092` (SASL_PLAINTEXT), `9094` (SASL_SSL)
+- Data dir: `data/kafka`
 
-## Sample client configs
-- SASL/PLAIN file (`client.properties`):
-  ```
-  bootstrap.servers=${HOST_IP}:9092
-  security.protocol=SASL_PLAINTEXT
-  sasl.mechanism=PLAIN
-  sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_CLIENT_USER}" password="${KAFKA_CLIENT_PASSWORD}";
-  ```
-  Use with CLI: `kafka-topics --bootstrap-server ${HOST_IP}:9092 --command-config client.properties --list`
+```bash
+# Local only
+./kafka-start.sh --generate-passwords
 
-- SASL_SSL + SCRAM (kcat over 443):
-  ```bash
-  set -a; source .env; set +a
-  printf 'hello\n' | kcat -b "${HOST_IP}:443" \
-    -X security.protocol=SASL_SSL \
-    -X sasl.mechanisms=SCRAM-SHA-512 \
-    -X sasl.username="${SCRAM_CLIENT_USER}" \
-    -X sasl.password="${SCRAM_CLIENT_PASSWORD}" \
-    -X ssl.ca.location=/etc/ssl/cert.pem \
-    -t test_secure -P
-  kcat -b "${HOST_IP}:443" \
-    -X security.protocol=SASL_SSL \
-    -X sasl.mechanisms=SCRAM-SHA-512 \
-    -X sasl.username="${SCRAM_CLIENT_USER}" \
-    -X sasl.password="${SCRAM_CLIENT_PASSWORD}" \
-    -X ssl.ca.location=/etc/ssl/cert.pem \
-    -t test_secure -C -o beginning -e -q
-  ```
-  For self-signed certs, point `ssl.ca.location` to your `certs/ca.crt` and disable hostname verification with `-X ssl.endpoint.identification.algorithm=none` if your SANs don’t match.
+# Remote clients connect to this IP/DNS
+./kafka-start.sh --generate-passwords -H 10.244.2.218
+```
 
-## TLS options
-- **Self-signed (dev):** Generate outside the repo, symlink into `certs/`, trust `ca.crt` in clients, and set `ssl.endpoint.identification.algorithm=none` if SANs are missing.
-- **Regenerate self-signed with your DNS/IP (quick recipe):**
-  ```bash
-  # prep (outside repo, symlinked to certs/)
-  mkdir -p ../kafka-kraft-real-certs/certs
-  ln -s ../kafka-kraft-real-certs/certs certs
+### 2) Three brokers (KRaft quorum)
+- Ports:
+  - broker-1: `19092` (plain), `19094` (ssl)
+  - broker-2: `29092` (plain), `29094` (ssl)
+  - broker-3: `39092` (plain), `39094` (ssl)
+- Data dirs: `data/broker-1`, `data/broker-2`, `data/broker-3`
 
-  # CA
-  openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
-    -subj "/CN=kafka-ca" \
-    -keyout certs/ca.key \
-    -out certs/ca.crt
+```bash
+./kafka-start.sh -b 3 --generate-passwords -H 10.244.2.218
 
-  # SAN config (edit DNS/IP to match your host name)
-  cat > certs/openssl-san.cnf <<'EOF'
-  [req]
-  distinguished_name=req_distinguished_name
-  req_extensions=v3_req
-  prompt=no
-  [req_distinguished_name]
-  CN=kafka-broker
-  [v3_req]
-  keyUsage = keyEncipherment, digitalSignature
-  extendedKeyUsage = serverAuth
-  subjectAltName = DNS:kafka.example.com,IP:203.0.113.10
-  EOF
+# kcat example (plain)
+kcat -b 10.244.2.218:19092,10.244.2.218:29092,10.244.2.218:39092 \
+  -X security.protocol=SASL_PLAINTEXT \
+  -X sasl.mechanism=PLAIN \
+  -X sasl.username=admin \
+  -X sasl.password='<admin-pass>' \
+  -L
+```
 
-  # key + csr, then sign
-  openssl req -new -newkey rsa:2048 -nodes \
-    -keyout certs/broker.key \
-    -out certs/broker.csr \
-    -config certs/openssl-san.cnf
-  openssl x509 -req -in certs/broker.csr \
-    -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
-    -out certs/broker.crt -days 365 \
-    -extensions v3_req -extfile certs/openssl-san.cnf
+### 3) UI on/off
+```bash
+# Disable UI
+./kafka-start.sh --generate-passwords --no-ui
 
-  # keystore/truststore (uses SSL_STORE_PASSWORD from .env)
-  openssl pkcs12 -export \
-    -in certs/broker.crt -inkey certs/broker.key -certfile certs/ca.crt \
-    -out certs/broker.p12 -name broker -passout pass:${SSL_STORE_PASSWORD}
-  keytool -importcert -alias kafka-ca -file certs/ca.crt \
-    -keystore certs/truststore.p12 -storepass ${SSL_STORE_PASSWORD} -noprompt
-  ```
-- **Public cert (e.g., Let’s Encrypt):** Export `broker.p12` and `truststore.p12` from your `fullchain.pem`/`privkey.pem` with the same `SSL_STORE_PASSWORD`; clients can rely on system CAs.
-- After changing certs or `SSL_STORE_PASSWORD`, recreate: `docker compose down && docker compose up -d`.
+# Custom UI port
+./kafka-start.sh --generate-passwords --ui-port 8081
+```
 
-## Secure-only mode (disable plaintext)
-- Simplest: do not forward 9092 on your router/firewall; use 443/9094 only.
-- Hard disable: remove 9092 mapping and all `EXTERNAL` listener lines from `docker-compose.yml`, then recreate the stack.
+### 4) Foreground vs detached
+```bash
+# Run in foreground (CTRL+C stops)
+./kafka-start.sh --generate-passwords --foreground
+```
 
-## Multi-broker option (3-node KRaft)
-- File: `docker-compose.multi.yml`
-- External SASL listeners: 19092, 29092, 39092
-- Start: `docker compose -f docker-compose.multi.yml up -d`
-- Do not run single and multi stacks simultaneously (port and data-dir collisions).
+### 5) TLS and auth modes (SASL_PLAINTEXT vs SASL_SSL)
+You have two ways to connect externally:
+
+**A) SASL_PLAINTEXT (no certs needed)**
+```bash
+kcat -b 10.244.2.218:9092 \
+  -X security.protocol=SASL_PLAINTEXT \
+  -X sasl.mechanism=PLAIN \
+  -X sasl.username=admin \
+  -X sasl.password='<admin-pass>' \
+  -L
+```
+
+**B) SASL_SSL + SCRAM (encrypted)**
+- If you want to verify certs, point at `certs/ca.crt`.
+- If you want to skip verification (convenient for dev), disable it on the client.
+
+Verify certs:
+```bash
+kcat -b 10.244.2.218:9094 \
+  -X security.protocol=SASL_SSL \
+  -X sasl.mechanism=SCRAM-SHA-512 \
+  -X sasl.username='scram-admin' \
+  -X sasl.password='<admin-pass>' \
+  -X ssl.ca.location=/full/path/to/certs/ca.crt \
+  -X ssl.endpoint.identification.algorithm=none \
+  -L
+```
+
+Skip verification (still encrypted, but not authenticated):
+```bash
+kcat -b 10.244.2.218:9094 \
+  -X security.protocol=SASL_SSL \
+  -X sasl.mechanism=SCRAM-SHA-512 \
+  -X sasl.username='scram-admin' \
+  -X sasl.password='<admin-pass>' \
+  -X enable.ssl.certificate.verification=false \
+  -X ssl.endpoint.identification.algorithm=none \
+  -L
+```
+
+### 6) Using your own TLS certs
+If you already have `broker.p12` and `truststore.p12`, place them in `certs/` (or symlink `certs/` to a secure external directory). The script uses whatever is present unless you pass `--force-certs`.
+
+## Users and auth
+
+### PLAIN users (SASL_PLAINTEXT)
+PLAIN users are defined in the broker JAAS config, so update `.env` and recreate the container:
+```bash
+# Edit .env, then
+docker compose -f docker-compose.generated.yml up -d --force-recreate
+```
+
+### SCRAM users (SASL_SSL)
+SCRAM users can be added without restart:
+```bash
+# Load admin creds from .env
+set -a; source .env; set +a
+
+./scripts/add_scram_user.sh new-user new-password
+```
+
+The `user-setup` container already creates `scram-admin` and `scram-client` on startup.
+
+## Useful files
+- `.env` - runtime settings used by compose
+- `.kafka-credentials` - generated passwords and examples
+- `docker-compose.generated.yml` - actual stack definition
 
 ## Smoke test
-- `./scripts/test_stack.sh` (auto-detects single vs multi) creates a topic, produces/consumes one message, and cleans up.
-- Override topic: `KAFKA_TEST_TOPIC=foo ./scripts/test_stack.sh`
-- Use `COMPOSE_CMD="podman compose"` if you run a different compose binary.
+```bash
+./scripts/test_stack.sh
+```
 
-## Debugging checklist
-- `docker compose ps` and `docker compose logs broker | tail` to confirm the broker is running.
-- Advertised listeners: `docker compose exec broker bash -lc 'echo $KAFKA_ADVERTISED_LISTENERS'`.
-- TLS sanity: `openssl s_client -connect <domain>:443 -servername <domain>`.
-- End-to-end: run the kcat commands above (443 for TLS/SCRAM; 9092 for plaintext only if enabled).
+## Troubleshooting
+- If clients get `localhost` in metadata, you must set `-H <host-or-ip>` and restart.
+- If permissions errors occur on `data/` or `certs/`, your filesystem may block chmod. Ensure the container user can read `certs/*.p12` and write to the data directory.
+- If you do not want TLS at all, just use the 9092 listener (SASL_PLAINTEXT).
 
 ## Notes
-- Update `HOST_IP` if your host IP/DNS changes and recreate the stack.
-- Data persists under `./data-user/kafka`.
-- Images: `confluentinc/cp-kafka:7.6.1` (KRaft) and `provectuslabs/kafka-ui`.
-- Keep secrets in `.env` and external cert locations; do not commit them.
+- Single broker ports: `9092` (plain) and `9094` (ssl)
+- Multi broker ports: `19092/19094`, `29092/29094`, `39092/39094`
+- Internal/controller ports are not exposed
