@@ -100,12 +100,58 @@ generate_password() {
 }
 
 generate_cluster_id() {
-    # Generate a valid Kafka cluster ID (base64-encoded UUID, 22 chars)
-    if command -v openssl &> /dev/null; then
-        openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 22
+    # Generate a valid Kafka cluster ID (base64-encoded UUID, 22 chars, no padding)
+    if command -v python3 &> /dev/null; then
+        python3 - <<'PY'
+import base64, uuid
+print(base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="))
+PY
+    elif command -v uuidgen &> /dev/null && command -v xxd &> /dev/null && command -v base64 &> /dev/null; then
+        uuidgen | tr -d '-' | xxd -r -p | base64 | tr -d '=' | tr '+/' '-_'
+    elif command -v openssl &> /dev/null; then
+        openssl rand -base64 16 | tr -d '=' | tr '+/' '-_' | tr -d '\n'
     else
-        cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 22
+        echo "kp7Rzc7oT4GtsqDuqo21Wg"
     fi
+}
+
+resolve_certs_dir() {
+    local cert_dir="$CERTS_DIR"
+    if [[ -L "$cert_dir" ]]; then
+        cert_dir="$(cd "$cert_dir" 2>/dev/null && pwd || echo "$CERTS_DIR")"
+    fi
+    echo "$cert_dir"
+}
+
+ensure_cert_permissions() {
+    local cert_dir
+    cert_dir="$(resolve_certs_dir)"
+    if [[ -d "$cert_dir" ]]; then
+        if ! chmod 755 "$cert_dir"; then
+            warn "Unable to chmod certs directory ($cert_dir); container may not read keystores"
+        fi
+        if [[ -f "$cert_dir/broker.p12" ]] && ! chmod 644 "$cert_dir/broker.p12"; then
+            warn "Unable to chmod $cert_dir/broker.p12; container may not read keystore"
+        fi
+        if [[ -f "$cert_dir/truststore.p12" ]] && ! chmod 644 "$cert_dir/truststore.p12"; then
+            warn "Unable to chmod $cert_dir/truststore.p12; container may not read truststore"
+        fi
+    fi
+}
+
+prepare_data_dirs() {
+    local dirs=()
+    if [[ "$BROKERS" == "1" ]]; then
+        dirs+=("$SCRIPT_DIR/data/kafka")
+    else
+        dirs+=("$SCRIPT_DIR/data/broker-1" "$SCRIPT_DIR/data/broker-2" "$SCRIPT_DIR/data/broker-3")
+    fi
+    for dir in "${dirs[@]}"; do
+        mkdir -p "$dir"
+        if ! chmod -R a+rwX "$dir"; then
+            warn "Unable to chmod data directory ($dir); broker may not be able to write"
+        fi
+    done
 }
 
 # Parse arguments
@@ -213,7 +259,7 @@ if [[ -z "$SSL_PASSWORD" ]]; then
     SSL_PASSWORD=$(generate_password)
 fi
 
-CLUSTER_ID=$(generate_cluster_id)
+CLUSTER_ID="${CLUSTER_ID:-$(generate_cluster_id)}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -322,6 +368,7 @@ SANEOF
 else
     success "SSL certificates already exist"
 fi
+ensure_cert_permissions
 
 # Create .env file
 log "Creating environment configuration..."
@@ -734,8 +781,8 @@ fi
 
 success "Docker Compose configuration generated"
 
-# Create data directories
-mkdir -p "$SCRIPT_DIR/data"
+# Create data directories with container-friendly permissions
+prepare_data_dirs
 
 # Start the cluster
 log "Starting Kafka cluster..."
