@@ -514,7 +514,7 @@ services:
       - ./data/kafka:/var/lib/kafka/data
       - ./certs:/etc/kafka/secrets:ro
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9093", "--command-config", "/dev/null"]
+      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 5
